@@ -23,6 +23,8 @@ var (
 	logPath *string
 	verbose *bool
 
+	cgroupsPath *string
+
 	// influxdb options
 	host      *string
 	username  *string
@@ -60,8 +62,10 @@ func handleSignals(c chan os.Signal) {
 func init() {
 	log.SetPrefix("[" + appName + "] ")
 
-	logPath = flag.String("logfile", "proxy.log", "path to log file")
+	logPath = flag.String("logfile", appName+".log", "path to log file")
 	verbose = flag.Bool("verbose", false, "true if you need to trace the requests")
+
+	cgroupsPath = flag.String("cgroups", "/sys/fs/cgroups", "location of cgroups directory")
 
 	// influxdb options
 	host = flag.String("influxdb", "localhost:8086", "host:port for influxdb")
@@ -70,7 +74,7 @@ func init() {
 	database = flag.String("database", "", "database for influxdb")
 
 	// docker options
-	dockerSock := flag.String("docker", "", "Docker socket e.g. unix:///var/run/docker.sock")
+	dockerSock := flag.String("docker", "", "Docker socket used to resolve container IDs to friendly names e.g. unix:///var/run/docker.sock")
 
 	flag.Parse()
 
@@ -130,6 +134,7 @@ func main() {
 	go handleSignals(sc)
 
 	errChan := make(chan error)
+	cstat.BasePath = *cgroupsPath
 	err = cstat.Init(errChan)
 	if err != nil {
 		log.Fatal(err)
@@ -163,7 +168,7 @@ func readStats() error {
 		}
 		for id, stat := range stats {
 			hostname := id
-			// Try and resolve Docker container ID to real hostname
+			// Try and resolve Docker container ID to real name
 			if docker != nil {
 				docker.Lock()
 				if realName, ok := docker.names[id]; ok {
@@ -173,7 +178,9 @@ func readStats() error {
 			}
 			seriesGroup = append(seriesGroup, processStat(hostname, stat.Memory)...)
 			seriesGroup = append(seriesGroup, processStat(hostname, stat.CPU)...)
-			log.Printf("[TRACE] got seriesGroup %v\n", seriesGroup)
+			if *verbose {
+				log.Printf("[TRACE] got seriesGroup %v\n", seriesGroup)
+			}
 		}
 		if len(seriesGroup) > 0 {
 			go backendWriter(seriesGroup)
@@ -235,11 +242,14 @@ func genSeries(name, hostName, cacheKey string, value uint64, timestamp time.Tim
 		beforeCache[cacheKey] = entry
 	}
 
+	// InfluxDB takes timestamps as milliseconds by default
+	timestampMs := timestamp.UnixNano() / 1000000
+
 	series := &influxdb.Series{
 		Name:    name,
 		Columns: []string{"time", "value", "host"},
 		Points: [][]interface{}{
-			[]interface{}{timestamp, normalizedValue, hostName},
+			[]interface{}{timestampMs, normalizedValue, hostName},
 		},
 	}
 	if *verbose {
