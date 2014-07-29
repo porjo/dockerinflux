@@ -15,7 +15,7 @@ import (
 )
 
 const appName = "dockerinflux"
-const influxWriteInterval = time.Second
+const influxWriteInterval = 30 * time.Second
 const influxWriteLimit = 50
 const packetChannelSize = 100
 
@@ -65,7 +65,7 @@ func init() {
 	logPath = flag.String("logfile", appName+".log", "path to log file")
 	verbose = flag.Bool("verbose", false, "true if you need to trace the requests")
 
-	cgroupsPath = flag.String("cgroups", "/sys/fs/cgroups", "location of cgroups directory")
+	cgroupsPath = flag.String("cgroups", "/sys/fs/cgroup", "location of cgroups directory")
 
 	// influxdb options
 	host = flag.String("influxdb", "localhost:8086", "host:port for influxdb")
@@ -74,7 +74,7 @@ func init() {
 	database = flag.String("database", "", "database for influxdb")
 
 	// docker options
-	dockerSock := flag.String("docker", "", "Docker socket used to resolve container IDs to friendly names e.g. unix:///var/run/docker.sock")
+	dockerSock := flag.String("docker", "unix:///var/run/docker.sock", "Docker socket used to resolve container IDs to friendly names")
 
 	flag.Parse()
 
@@ -121,12 +121,14 @@ func main() {
 		log.Fatalf("failed to make a influxdb client: %v\n", err)
 	}
 
-	/*
+	err = client.Ping()
+	if err != nil {
+		time.Sleep(5 * time.Second)
 		err = client.Ping()
 		if err != nil {
 			log.Fatalf("failed to reach influxdb backend: %v\n", err)
 		}
-	*/
+	}
 
 	// register a signal handler
 	sc := make(chan os.Signal, 1)
@@ -157,17 +159,21 @@ func main() {
 
 func readStats() error {
 	seriesGroup := make([]*influxdb.Series, 0)
+	timer := time.Now()
 	for {
 		if *verbose {
 			log.Printf("[TRACE] reading stats\n")
 		}
-		time.Sleep(influxWriteInterval)
 		stats, err := cstat.ReadStats()
 		if err != nil {
 			return err
 		}
 		for id, stat := range stats {
 			hostname := id
+			// Trim container id
+			if len(id) >= 12 {
+				hostname = id[0:12]
+			}
 			// Try and resolve Docker container ID to real name
 			if docker != nil {
 				docker.Lock()
@@ -181,11 +187,13 @@ func readStats() error {
 			if *verbose {
 				log.Printf("[TRACE] got seriesGroup %v\n", seriesGroup)
 			}
+			if len(seriesGroup) >= influxWriteLimit || time.Since(timer) >= influxWriteInterval {
+				go backendWriter(seriesGroup)
+				seriesGroup = make([]*influxdb.Series, 0)
+				timer = time.Now()
+			}
 		}
-		if len(seriesGroup) > 0 {
-			go backendWriter(seriesGroup)
-			seriesGroup = make([]*influxdb.Series, 0)
-		}
+		time.Sleep(influxWriteInterval)
 	}
 }
 
@@ -207,7 +215,6 @@ func processStat(hostname string, stat interface{}) []*influxdb.Series {
 
 	switch t := stat.(type) {
 	case cstat.MemStat:
-		log.Printf("memstat\n")
 		mem := stat.(cstat.MemStat)
 		name := "Memory.RSS"
 		cacheKey := hostname + "." + name
@@ -216,7 +223,6 @@ func processStat(hostname string, stat interface{}) []*influxdb.Series {
 		cacheKey = hostname + "." + name
 		seriesGroup = append(seriesGroup, genSeries(name, hostname, cacheKey, mem.Cache, mem.Timestamp, false))
 	case cstat.CPUStat:
-		log.Printf("cpustat\n")
 		cpu := stat.(cstat.CPUStat)
 		name := "CPU.User"
 		cacheKey := hostname + "." + name
@@ -267,7 +273,17 @@ func (d *dockerT) updateNames() error {
 	defer d.Unlock()
 	docker.names = make(map[string]string)
 	for _, c := range containers {
-		d.names[c.Id] = strings.TrimPrefix(c.Names[0], "/")
+		info, err := d.client.InspectContainer(c.Id)
+		if err != nil {
+			return err
+		}
+		if info.State.Running {
+			d.names[c.Id] = strings.TrimPrefix(c.Names[0], "/")
+		}
 	}
+	if *verbose {
+		log.Printf("[TRACE] docker names updated: %v\n", d.names)
+	}
+
 	return nil
 }
