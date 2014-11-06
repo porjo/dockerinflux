@@ -62,7 +62,7 @@ func handleSignals(c chan os.Signal) {
 func init() {
 	log.SetPrefix("[" + appName + "] ")
 
-	logPath = flag.String("logfile", appName+".log", "path to log file")
+	logPath = flag.String("logfile", "", "path to log file")
 	verbose = flag.Bool("verbose", false, "true if you need to trace the requests")
 
 	cgroupsPath = flag.String("cgroups", "/sys/fs/cgroup", "location of cgroups directory")
@@ -74,7 +74,7 @@ func init() {
 	database = flag.String("database", "", "database for influxdb")
 
 	// docker options
-	dockerSock := flag.String("docker", "unix:///var/run/docker.sock", "Docker socket used to resolve container IDs to friendly names")
+	dockerSock := flag.String("docker", "", "Docker socket used to resolve container IDs to friendly names e.g. unix:///var/run/docker.sock")
 
 	flag.Parse()
 
@@ -103,12 +103,20 @@ func init() {
 }
 
 func main() {
-	logFile, err := os.OpenFile(*logPath, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
-	if err != nil {
-		log.Fatalf("failed to open file: %v\n", err)
+
+	var err error
+
+	if *logPath != "" {
+		var logFile *os.File
+		logFile, err = os.OpenFile(*logPath, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
+		if err != nil {
+			log.Fatalf("failed to open file: %v\n", err)
+		}
+		log.SetOutput(logFile)
+		defer logFile.Close()
 	}
-	//log.SetOutput(logFile)
-	defer logFile.Close()
+
+	log.Printf("Starting\n")
 
 	// make influxdb client
 	client, err = influxdb.NewClient(&influxdb.ClientConfig{
@@ -215,31 +223,29 @@ func processStat(hostname string, stat interface{}) []*influxdb.Series {
 
 	switch t := stat.(type) {
 	case cstat.MemStat:
-		mem := stat.(cstat.MemStat)
 		name := "Memory.RSS"
 		cacheKey := hostname + "." + name
-		seriesGroup = append(seriesGroup, genSeries(name, hostname, cacheKey, mem.RSS, mem.Timestamp, false))
+		seriesGroup = append(seriesGroup, genSeries(name, hostname, cacheKey, t.RSS, t.Timestamp, false))
 		name = "Memory.Cache"
 		cacheKey = hostname + "." + name
-		seriesGroup = append(seriesGroup, genSeries(name, hostname, cacheKey, mem.Cache, mem.Timestamp, false))
+		seriesGroup = append(seriesGroup, genSeries(name, hostname, cacheKey, t.Cache, t.Timestamp, false))
 	case cstat.CPUStat:
-		cpu := stat.(cstat.CPUStat)
 		name := "CPU.User"
 		cacheKey := hostname + "." + name
-		seriesGroup = append(seriesGroup, genSeries(name, hostname, cacheKey, t.User, cpu.Timestamp, true))
+		seriesGroup = append(seriesGroup, genSeries(name, hostname, cacheKey, t.User, t.Timestamp, true))
 		name = "CPU.System"
 		cacheKey = hostname + "." + name
-		seriesGroup = append(seriesGroup, genSeries(name, hostname, cacheKey, t.System, cpu.Timestamp, true))
+		seriesGroup = append(seriesGroup, genSeries(name, hostname, cacheKey, t.System, t.Timestamp, true))
 	}
 
 	return seriesGroup
 }
 
-func genSeries(name, hostName, cacheKey string, value uint64, timestamp time.Time, normalize bool) *influxdb.Series {
-	normalizedValue := value
-	if normalize {
+func genSeries(name, hostName, cacheKey string, value uint64, timestamp time.Time, delta bool) *influxdb.Series {
+	deltaValue := value
+	if delta {
 		if before, ok := beforeCache[cacheKey]; ok {
-			normalizedValue = value - before.Value
+			deltaValue = value - before.Value
 		}
 		entry := CacheEntry{
 			Timestamp: timestamp,
@@ -255,7 +261,7 @@ func genSeries(name, hostName, cacheKey string, value uint64, timestamp time.Tim
 		Name:    name,
 		Columns: []string{"time", "value", "host"},
 		Points: [][]interface{}{
-			[]interface{}{timestampMs, normalizedValue, hostName},
+			[]interface{}{timestampMs, deltaValue, hostName},
 		},
 	}
 	if *verbose {
