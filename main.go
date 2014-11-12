@@ -1,3 +1,23 @@
+// Copyright (C) 2014 Ian Bishop
+//
+// This program is free software; you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation; either version 2 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License along
+// with this program; if not, write to the Free Software Foundation, Inc.,
+// 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+
+// Dockerinflux populates InfluxDB backend with metrics (CPU, memory) from Docker
+// containers running on localhost. These can then be graphed using a frontend
+// like Grafana.
+//
 package main
 
 import (
@@ -68,13 +88,13 @@ func init() {
 	cgroupsPath = flag.String("cgroups", "/sys/fs/cgroup", "location of cgroups directory")
 
 	// influxdb options
-	host = flag.String("influxdb", "localhost:8086", "host:port for influxdb")
-	username = flag.String("username", "root", "username for influxdb")
-	password = flag.String("password", "root", "password for influxdb")
-	database = flag.String("database", "", "database for influxdb")
+	host = flag.String("influxdb", "localhost:8086", "host:port for InfluxDB")
+	username = flag.String("username", "root", "username for InfluxDB")
+	password = flag.String("password", "root", "password for InfluxDB")
+	database = flag.String("database", "", "database for InfluxDB")
 
 	// docker options
-	dockerSock := flag.String("docker", "", "Docker socket used to resolve container IDs to friendly names e.g. unix:///var/run/docker.sock")
+	dockerSock := flag.String("docker", "", "Docker socket used to resolve container IDs to friendly names e.g. unix:///var/run/docker.sock (optional)")
 
 	flag.Parse()
 
@@ -103,7 +123,6 @@ func init() {
 }
 
 func main() {
-
 	var err error
 
 	if *logPath != "" {
@@ -162,7 +181,6 @@ func main() {
 	if err != nil {
 		log.Fatalf("errChan %s\n", err)
 	}
-
 }
 
 func readStats() error {
