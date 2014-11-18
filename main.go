@@ -83,7 +83,7 @@ func init() {
 	log.SetPrefix("[" + appName + "] ")
 
 	logPath = flag.String("logfile", "", "path to log file")
-	verbose = flag.Bool("verbose", false, "true if you need to trace the requests")
+	verbose = flag.Bool("verbose", false, "turn on debug output")
 
 	cgroupsPath = flag.String("cgroups", "/sys/fs/cgroup", "location of cgroups directory")
 
@@ -91,7 +91,7 @@ func init() {
 	host = flag.String("influxdb", "localhost:8086", "host:port for InfluxDB")
 	username = flag.String("username", "root", "username for InfluxDB")
 	password = flag.String("password", "root", "password for InfluxDB")
-	database = flag.String("database", "", "database for InfluxDB")
+	database = flag.String("database", "dockerinflux", "database for InfluxDB")
 
 	// docker options
 	dockerSock := flag.String("docker", "", "Docker socket used to resolve container IDs to friendly names e.g. unix:///var/run/docker.sock (optional)")
@@ -154,6 +154,20 @@ func main() {
 		err = client.Ping()
 		if err != nil {
 			log.Fatalf("failed to reach influxdb backend: %v\n", err)
+		}
+	}
+
+	// Create DB if not exists
+	createDb := true
+	dbs, _ := client.GetDatabaseList()
+	if _, ok := dbs[*database]; ok {
+		createDb = false
+	}
+
+	if createDb {
+		log.Printf("database '%s' not found, creating...\n", *database)
+		if err = client.CreateDatabase(*database); err != nil {
+			log.Fatalf("error creating database '%s', %s\n", *database, err)
 		}
 	}
 
@@ -301,6 +315,7 @@ func (d *dockerT) updateNames() error {
 		if err != nil {
 			return err
 		}
+
 		if info.State.Running {
 			d.names[c.Id] = strings.TrimPrefix(c.Names[0], "/")
 		}
