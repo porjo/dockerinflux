@@ -22,6 +22,7 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
@@ -224,6 +225,7 @@ func readStats() error {
 			}
 			seriesGroup = append(seriesGroup, processStat(hostname, stat.Memory)...)
 			seriesGroup = append(seriesGroup, processStat(hostname, stat.CPU)...)
+			seriesGroup = append(seriesGroup, processStat(hostname, stat.BlkIO)...)
 			if *verbose {
 				log.Printf("[TRACE] got seriesGroup %v\n", seriesGroup)
 			}
@@ -253,21 +255,39 @@ func processStat(hostname string, stat interface{}) []*influxdb.Series {
 
 	var seriesGroup []*influxdb.Series
 
+	var name, cacheKey string
 	switch t := stat.(type) {
 	case cstat.MemStat:
-		name := "Memory.RSS"
-		cacheKey := hostname + "." + name
+		name = "Memory.RSS"
+		cacheKey = hostname + "." + name
 		seriesGroup = append(seriesGroup, genSeries(name, hostname, cacheKey, t.RSS, t.Timestamp, false))
 		name = "Memory.Cache"
 		cacheKey = hostname + "." + name
 		seriesGroup = append(seriesGroup, genSeries(name, hostname, cacheKey, t.Cache, t.Timestamp, false))
 	case cstat.CPUStat:
-		name := "CPU.User"
-		cacheKey := hostname + "." + name
+		name = "CPU.User"
+		cacheKey = hostname + "." + name
 		seriesGroup = append(seriesGroup, genSeries(name, hostname, cacheKey, t.User, t.Timestamp, true))
 		name = "CPU.System"
 		cacheKey = hostname + "." + name
 		seriesGroup = append(seriesGroup, genSeries(name, hostname, cacheKey, t.System, t.Timestamp, true))
+	case cstat.BlkIOStat:
+		for _, dev := range t.Bytes.Devices {
+			name = fmt.Sprintf("BlkIO.Bytes.%d.%d.Read", dev.Major, dev.Minor)
+			cacheKey = hostname + "." + name
+			seriesGroup = append(seriesGroup, genSeries(name, hostname, cacheKey, dev.Read, t.Bytes.Timestamp, true))
+			name = fmt.Sprintf("BlkIO.Bytes.%d.%d.Write", dev.Major, dev.Minor)
+			cacheKey = hostname + "." + name
+			seriesGroup = append(seriesGroup, genSeries(name, hostname, cacheKey, dev.Write, t.Bytes.Timestamp, true))
+		}
+		for _, dev := range t.IOPS.Devices {
+			name = fmt.Sprintf("BlkIO.IOPS.%d.%d.Read", dev.Major, dev.Minor)
+			cacheKey = hostname + "." + name
+			seriesGroup = append(seriesGroup, genSeries(name, hostname, cacheKey, dev.Read, t.Bytes.Timestamp, true))
+			name = fmt.Sprintf("BlkIO.IOPS.%d.%d.Write", dev.Major, dev.Minor)
+			cacheKey = hostname + "." + name
+			seriesGroup = append(seriesGroup, genSeries(name, hostname, cacheKey, dev.Write, t.Bytes.Timestamp, true))
+		}
 	}
 
 	return seriesGroup
@@ -303,13 +323,13 @@ func genSeries(name, hostName, cacheKey string, value uint64, timestamp time.Tim
 }
 
 func (d *dockerT) updateNames() error {
-	containers, err := d.client.ListContainers(true)
+	containers, err := d.client.ListContainers(true, true, "")
 	if err != nil {
 		return err
 	}
 	d.Lock()
 	defer d.Unlock()
-	docker.names = make(map[string]string)
+	d.names = make(map[string]string)
 	for _, c := range containers {
 		info, err := d.client.InspectContainer(c.Id)
 		if err != nil {
