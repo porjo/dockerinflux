@@ -1,3 +1,6 @@
+DEPRECATED in favour of Telegraf + Docker plugin for input, and Chronograf for output
+
+
 ## Dockerinflux
 
 Dockerinflux populates [InfluxDB](http://github.com/influxdb/influxdb) backend with metrics (CPU, memory) from Docker containers running on localhost. These can then be graphed using a frontend like [Grafana](http://github.com/grafana/grafana)
